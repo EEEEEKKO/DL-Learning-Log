@@ -32,6 +32,7 @@ class MultiHeadAttention(nn.Module):
 
         self.Dropout = nn.Dropout(dropout)
         self.W_o = nn.Linear(d_model, d_model)
+        self.softmax = nn.Softmax(dim=1)
     
     def get_mask(self, mask: torch.Tensor, query_shape: List[int], key_shape: List[int]):
         assert mask.shape[0] == 1 or mask.shape[0] == query_shape[0]
@@ -43,11 +44,7 @@ class MultiHeadAttention(nn.Module):
         return mask
     
     def get_scores(self, query: torch.Tensor, key: torch.Tensor):
-        query = query.permute(1,2,0,3)
-        key = key.permute(1,2,0,3)
-        scores = torch.matmul(query, key.transpose(-2,-1)) / (self.d_k ** 0.5)
-        scores = scores.permute(2,3,0,1)
-        return scores
+        return torch.einsum('ibhd,jbhd->ijbh', query, key)
     
     def forward(self,  
                 query: torch.Tensor, 
@@ -82,3 +79,21 @@ class MultiHeadAttention(nn.Module):
 
 
 
+def test_multihead_attention():
+    d_model = 512
+    heads = 8
+    seq_len = 10
+    batch_size = 2
+
+    query = torch.rand(seq_len, batch_size, d_model)
+    key = torch.rand(seq_len, batch_size, d_model)
+    value = torch.rand(seq_len, batch_size, d_model)
+
+    attention_layer = MultiHeadAttention(d_model, heads)
+    output = attention_layer(query, key, value)
+
+    assert output.shape == (seq_len, batch_size, d_model), "Output shape mismatch!"
+    print("Multi-head attention test passed!")
+
+if __name__ == "__main__":
+    test_multihead_attention()
