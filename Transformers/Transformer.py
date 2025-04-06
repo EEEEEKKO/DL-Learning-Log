@@ -1,99 +1,116 @@
 import torch
 import torch.nn as nn
-from typing import Optional, List
+import math
+from MultiHeadAttention import MultiHeadAttention
+from FFN import FFN
+import copy
 
-class Attention(nn.Module):
-    def __init__(self, d_model: int, heads: int, d_k: int, bias: bool):
+class PositionalEncoding(nn.Module):
+    def __init__(self, d_model: int, n_vocab: int, max_len: int):
         super().__init__()
-        self.linear = nn.Linear(d_model, heads*d_k, bias=bias)
-        self.heads = heads
-        self.d_k = d_k
-
-    def forward(self, x: torch.Tensor):
+        self.linear = nn.Linear(n_vocab, d_model)
+        self.d_model = d_model
+        self.positional_encoding = nn.Parameter(nn.init.kaiming_normal_(torch.zeros(max_len,1,d_model), nonlinearity='relu'), requires_grad=True)
         
-        head_shape = x.shape[:-1]
-        x = self.linear(x)
+    def forward(self, x: torch.Tensor):
+        pe = self.positional_encoding[:x.shape[0]]
+        return self.linear(x) * math.sqrt(self.d_model) + pe
 
-        x = x.view(*head_shape, self.heads, self.d_k)
+
+class TransformerLayer(nn.Module):
+    def __init__(self, 
+                 d_model: int, 
+                 self_attn: MultiHeadAttention, 
+                 src_attn: MultiHeadAttention,
+                 ffn: FFN,
+                 dropout: float):
+        super().__init__()
+        self.d_model = d_model
+        self.self_attn = self_attn
+        self.src_attn = src_attn
+        self.ffn = ffn
+        self.dropout = nn.Dropout(dropout)
+        self.norm_self_attn = nn.LayerNorm([d_model])
+        if src_attn is not None:
+            self.norm_src_attn = nn.LayerNorm([d_model])
+        self.norm_ff = nn.LayerNorm([d_model])
+    
+    def forward(self, 
+                x: torch.Tensor,
+                mask: torch.Tensor,
+                src: torch.Tensor = None,
+                src_mask: torch.Tensor = None):
+        
+        #pre-norm better than post-norm
+        z = self.norm_self_attn(x)
+        self_attn_out = self.self_attn(query = z, key = z, value = z, mask = mask)
+
+        x = x + self.dropout(self_attn_out)
+
+        if src is not None:
+            z = self.norm_src_attn(x)
+            src_attn_out = self.src_attn(query = z, key = src, value = src, mask = src_mask)
+            x = x + self.dropout(src_attn_out)
+        
+        z = self.norm_ff(x)
+        
+        ff = self.ffn(z)
+
+        x = x + self.dropout(ff)
+
         return x
 
-
-class MultiHeadAttention(nn.Module):
-    def __init__(self, d_model: int, heads: int, dropout: float = 0.5, bias: bool = True):
+class Encoder(nn.Module):
+    def __init__(self, layer: TransformerLayer, n_layers: int):
         super().__init__()
-        
-        assert d_model % heads == 0
-        self.d_k = d_model // heads
-        self.heads = heads
-
-        self.W_q = Attention(d_model, heads, self.d_k, bias)
-        self.W_k = Attention(d_model, heads, self.d_k, bias)
-        self.W_v = Attention(d_model, heads, self.d_k, bias)
-
-        self.Dropout = nn.Dropout(dropout)
-        self.W_o = nn.Linear(d_model, d_model)
-        self.softmax = nn.Softmax(dim=1)
+        self.layers = nn.ModuleList([copy.deepcopy(layer) for _ in range(n_layers)])
+        self.norm = nn.LayerNorm([layer.d_model])
     
-    def get_mask(self, mask: torch.Tensor, query_shape: List[int], key_shape: List[int]):
-        assert mask.shape[0] == 1 or mask.shape[0] == query_shape[0]
-        assert mask.shape[1] == key_shape[0]
-        assert mask.shape[2] == 1 or mask.shape[2] == query_shape[1]
+    def forward(self, x: torch.Tensor, mask: torch.Tensor):
+        for layer in self.layers:
+            x = layer(x=x, mask=mask)
+        
+        return self.norm(x)
 
-        mask = mask.unsqueeze(-1)
-
-        return mask
+class Decoder(nn.Module):
+    def __init__(self, layer: TransformerLayer, n_layers: int):
+        self.layers = nn.ModuleList([copy.deepcopy(layer) for _ in range(n_layers)])
+        self.norm = nn.LayerNorm([layer.d_model])
     
-    def get_scores(self, query: torch.Tensor, key: torch.Tensor):
-        return torch.einsum('ibhd,jbhd->ijbh', query, key)
+    def forward(self, x: torch.Tensor, memory: torch.Tensor, src_mask: torch.Tensor, tgt_mask: torch.Tensor):
+        for layer in self.layers:
+            x = layer(x=x, mask=tgt_mask, src=memory, src_mask=src_mask)
+        
+        return self.norm(x)
+
+class Generator(nn.Module):
+    def __init__(self, n_vocab: int, d_model: int):
+        super().__init__()
+        self.proj = nn.Linear(d_model, n_vocab)
     
-    def forward(self,  
-                query: torch.Tensor, 
-                key: torch.Tensor,
-                value: torch.Tensor,
-                mask : Optional[torch.Tensor] = None):
-        seq_len, batch_size, _ = query.shape
+    def forward(self, x: torch.Tensor):
+        return self.proj(x)
 
-        if mask is not None:
-            mask = self.get_mask(mask, query.shape, key.shape)
+class Transformer(nn.Module):
+    def __init__(self, encoder: Encoder, decoder: Decoder, src_embed: nn.Module, tgt_embed: nn.Module, generator: Generator):
+        super().__init__()
+        self.encoder = encoder
+        self.decoder = decoder
+        self.src_embed = src_embed
+        self.tgt_embed = tgt_embed
+        self.generator = generator
+    
+        for p in self.parameters():
+            if p.dim() > 1:
+                nn.init.xavier_uniform_(p)
+    def encode(self, src: torch.Tensor, src_mask: torch.Tensor):
+        return self.encoder(self.src_embed(src), src_mask)
+    
+    def decode(self, memory: torch.Tensor, src_mask: torch.Tensor, tgt: torch.Tensor, tgt_mask: torch.Tensor):
+        return self.decoder(self.tgt_embed(tgt), memory, src_mask, tgt_mask)
+    
+    def forward(self, src: torch.Tensor, tgt: torch.Tensor, src_mask: torch.Tensor, tgt_mask: torch.Tensor):
+        encode = self.encode(src, src_mask)
         
-        #[seq_len, batch_size, heads, d_k]
-        query = self.W_q(query) 
-        key = self.W_k(key)
-        value = self.W_v(value)
+        return self.decode(encode, src_mask, tgt, tgt_mask)
         
-        #[seq_len_q, seq_len_k, batch_size, heads]
-        scores = self.get_scores(query, key)
-
-        if mask is not None:
-            scores = scores.masked_fill(mask == 0, float('-inf'))
-        
-        attn = self.softmax(scores)
-        attn = self.Dropout(attn)
-
-
-        # x = torch.matmul(attn.permute(2,3,0,1), value.permute(1,2,0,3)).permute(2,0,1,3)
-        x = torch.einsum('ijbh,jbhd->ibhd', attn, value)
-
-        x = x.reshape(seq_len, batch_size,-1)
-        return self.W_o(x)
-
-
-
-def test_multihead_attention():
-    d_model = 512
-    heads = 8
-    seq_len = 10
-    batch_size = 2
-
-    query = torch.rand(seq_len, batch_size, d_model)
-    key = torch.rand(seq_len, batch_size, d_model)
-    value = torch.rand(seq_len, batch_size, d_model)
-
-    attention_layer = MultiHeadAttention(d_model, heads)
-    output = attention_layer(query, key, value)
-
-    assert output.shape == (seq_len, batch_size, d_model), "Output shape mismatch!"
-    print("Multi-head attention test passed!")
-
-if __name__ == "__main__":
-    test_multihead_attention()
