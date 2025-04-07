@@ -21,8 +21,10 @@ class RotaryPositionalEmbeddings(nn.Module):
 
         seq_index = torch.arange(seq_len).float().to(x.device)
 
+        # [seq_len, d/2]
         idx_theta = torch.einsum('n,d->nd', seq_index, theta)
 
+        # [seq_len, d]
         idx_theta = torch.cat((idx_theta, idx_theta), dim=1)
 
         self.cos_cached = idx_theta.cos()[:, None, None, :]

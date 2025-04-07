@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 from typing import Optional, List
+import math
 
 class Attention(nn.Module):
     def __init__(self, d_model: int, heads: int, d_k: int, bias: bool):
@@ -44,7 +45,7 @@ class MultiHeadAttention(nn.Module):
         return mask
     
     def get_scores(self, query: torch.Tensor, key: torch.Tensor):
-        return torch.einsum('ibhd,jbhd->ijbh', query, key)
+        return torch.einsum('ibhd,jbhd->ijbh', query, key) / math.sqrt(self.d_k)
     
     def forward(self,  
                 query: torch.Tensor, 
