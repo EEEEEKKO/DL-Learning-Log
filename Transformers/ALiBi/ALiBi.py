@@ -30,6 +30,15 @@ def get_alibi_biases(n_heads: int, mask: torch.Tensor):
 
     return distance[:,:,None] * m[None, None, :]
 
+def get_alibi_biases_from_mask(n_heads: int, mask: torch.Tensor):
+    '''
+    mask:[seq_len_q, seq_len_k]
+    return: [seq_len_q, seq_len_k, n_heads]
+    '''
+    m = get_slopes(n_heads).to(mask.device)
+    distance = mask.cumsum(dim=-1)
+
+
 class ALiBiMultiHeadAttention(MultiHeadAttention):
     def __init__(self, heads: int, d_model: int, dropout: float):
         super().__init__(heads = heads, d_model = d_model, dropout = dropout)
