@@ -71,7 +71,7 @@ class ALiBiMultiHeadAttention(MultiHeadAttention):
 
         attn = self.softmax(scores)
 
-        attn = self.dropout(attn)
+        attn = self.Dropout(attn)
 
         x = torch.einsum('ijbh,jbhd->ibhd', attn, value)
 
