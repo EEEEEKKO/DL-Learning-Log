@@ -13,7 +13,7 @@ def get_slopes(n_heads: int):
     m = torch.pow(m_0, torch.arange(1, 1+n))
 
     if n < n_heads:
-        m_hat_0 = 2.0 ** (-4.0 / n)
+        m_hat_0 = 2.0 ** (-4.0 / n) #decrease faster for the extra heads
         m_hat = torch.pow(m_hat_0, torch.arange(1, 1 + 2*(n_heads-n), 2))
         m = torch.cat([m, m_hat])
     
@@ -26,7 +26,7 @@ def get_alibi_biases(n_heads: int, mask: torch.Tensor):
     return: [seq_len_q, seq_len_k, n_heads]
     '''
     m = get_slopes(n_heads).to(mask.device)
-    distance = mask.cumsum(dim=-1)
+    distance = mask.cumsum(dim=-1)# calculate the relative position for each pair
 
     return distance[:,:,None] * m[None, None, :]
 
@@ -50,7 +50,8 @@ class ALiBiMultiHeadAttention(MultiHeadAttention):
         assert mask.shape[0] == mask.shape[1] and mask.shape[2] == 1
 
         seq_len, batch_size, _ = query.shape
-
+        
+        # [seq_len_q, seq_len_k, batch_size]
         mask = self.get_mask(mask, query.shape, key.shape)
 
         query = self.W_q(query)
@@ -63,6 +64,7 @@ class ALiBiMultiHeadAttention(MultiHeadAttention):
             self.alibi_biases = get_alibi_biases(self.heads, mask[:, :, 0, 0])
         
         # Add ALiBi biases to scores
+        # alibi_biases: [seq_len_q, seq_len_k, n_heads]
         scores = scores + self.alibi_biases[:seq_len, :seq_len, None, :]
         
         scores = scores.masked_fill(mask == 0, float("-inf"))
