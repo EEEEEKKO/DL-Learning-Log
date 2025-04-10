@@ -1,6 +1,6 @@
 import torch 
 import torch.nn as nn
-
+from labml_nn.optimizers.configs import OptimizerConfigs
 from Classic_Transformers.Transformer import Encoder, Decoder
 
 
